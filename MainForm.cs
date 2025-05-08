@@ -1,14 +1,18 @@
-﻿using Octokit; // Still needed for Octokit exceptions
+﻿// MainForm.cs
+using Octokit;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using System.Windows.Forms; // Keep this for Form and UI controls
+using System.Windows.Forms;
+using SharpToken;
 
-namespace Repo2Text // Add namespace
+namespace Repo2Text
 {
     public partial class MainForm : Form
     {
@@ -17,24 +21,41 @@ namespace Repo2Text // Add namespace
         private string _currentZipPath;
         private DataSourceType _currentSourceType;
         private Dictionary<string, ZipArchiveEntry> _zipEntryMap;
-        private bool _isUpdatingCheckState = false;
+        private static GptEncoding _tokenizer;
+        private Dictionary<string, List<TreeNode>> _extensionTreeNodes = new Dictionary<string, List<TreeNode>>(StringComparer.OrdinalIgnoreCase);
+
+        // --- Corrected Flag Declaration ---
+        private bool _isUpdatingTreeViewProgrammatically = false;
+        private bool _isUpdatingExtensionsProgrammatically = false;
 
         public MainForm()
         {
             InitializeComponent();
-            // Load settings *after* InitializeComponent
+            InitializeTokenizer();
             LoadSettings();
-            // Ensure event handlers are attached
             AttachEventHandlers();
         }
 
-        // --- Load Event ---
+        private static void InitializeTokenizer()
+        {
+            try
+            {
+                _tokenizer = GptEncoding.GetEncoding("cl100k_base");
+            }
+            catch (Exception ex)
+            {
+                _tokenizer = null;
+                Console.WriteLine($"Error initializing tokenizer: {ex.Message}");
+            }
+        }
+
         private void MainForm_Load(object sender, EventArgs e)
         {
             SetStatus("Ready. Select a source.", false);
+            lblTokenCount.Visible = false;
+            lblTokenCount.Text = "";
         }
 
-        // --- Helper to attach event handlers cleanly ---
         private void AttachEventHandlers()
         {
             this.treeViewFiles.AfterCheck -= treeViewFiles_AfterCheck;
@@ -56,7 +77,6 @@ namespace Repo2Text // Add namespace
             this.btnDownloadZip.Click += btnDownloadZip_Click;
         }
 
-        // --- Settings ---
         private void LoadSettings()
         {
             try
@@ -84,8 +104,6 @@ namespace Repo2Text // Add namespace
             }
         }
 
-        // --- Event Handlers ---
-
         private async void btnFetchGitHub_Click(object sender, EventArgs e)
         {
             ClearUIState();
@@ -99,7 +117,6 @@ namespace Repo2Text // Add namespace
             }
 
             SetStatus("Parsing URL...");
-            // Ensure _currentRepoInfo is initialized before passing to service
             _currentRepoInfo = GitHubService.ParseRepoUrl(repoUrl);
 
             if (!_currentRepoInfo.IsValid)
@@ -112,28 +129,31 @@ namespace Repo2Text // Add namespace
             SaveSettings();
             SetStatus($"Fetching tree for {_currentRepoInfo.Owner}/{_currentRepoInfo.RepoName}...");
             _currentSourceType = DataSourceType.GitHub;
+            this.Cursor = Cursors.WaitCursor;
 
             try
             {
-                // Pass the _currentRepoInfo instance to be potentially updated by the service
                 var files = await GitHubService.GetRepositoryTreeAsync(_currentRepoInfo, token);
 
-                if (!_currentRepoInfo.IsValid) // Check if service marked it invalid
+                if (!_currentRepoInfo.IsValid)
                 {
                     SetStatus("Failed to resolve repository details. Check URL and token.", true);
-                    return; // Don't proceed if resolution failed
+                    return;
                 }
 
                 PopulateTreeView(files);
                 string displayPath = string.IsNullOrEmpty(_currentRepoInfo.Path) ? "/" : $"/{_currentRepoInfo.Path}";
-                // Use ResolvedRef which is set inside GetRepositoryTreeAsync
                 SetStatus($"Fetched {files.Count} items from '{_currentRepoInfo.ResolvedRef}' in path '{displayPath}'. Select files and generate.", false);
                 btnGenerateText.Enabled = files.Any();
                 btnDownloadZip.Enabled = true;
             }
             catch (Exception ex)
             {
-                HandleFetchError(ex); // Use a helper for consistent error handling
+                HandleFetchError(ex);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default;
             }
         }
 
@@ -180,16 +200,17 @@ namespace Repo2Text // Add namespace
             {
                 dialog.Description = "Select the root directory of the project";
                 dialog.UseDescriptionForTitle = true;
-                if (dialog.ShowDialog() == DialogResult.OK)
+                dialog.ShowNewFolderButton = false;
+                if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
                     ClearUIState();
                     _currentLocalPath = dialog.SelectedPath;
                     SetStatus($"Loading files from {_currentLocalPath}...");
                     _currentSourceType = DataSourceType.LocalDirectory;
+                    this.Cursor = Cursors.WaitCursor;
 
                     try
                     {
-                        this.Cursor = Cursors.WaitCursor; // Indicate loading
                         var files = await LocalFileService.GetDirectoryFilesAsync(_currentLocalPath);
                         PopulateTreeView(files);
                         SetStatus($"Loaded {files.Count} files. Select files and generate.", false);
@@ -199,7 +220,7 @@ namespace Repo2Text // Add namespace
                     catch (Exception ex)
                     {
                         SetStatus($"Error reading directory: {ex.Message}", true);
-                        txtOutput.Text = $"Error reading directory: {ex.Message}\n\nPlease ensure the application has permission to read the selected directory and its subdirectories.";
+                        txtOutput.Text = $"Error reading directory: {ex.Message}\nPlease ensure permissions.";
                     }
                     finally
                     {
@@ -215,18 +236,17 @@ namespace Repo2Text // Add namespace
             {
                 dialog.Filter = "ZIP Archives (*.zip)|*.zip|All Files (*.*)|*.*";
                 dialog.Title = "Select a ZIP Archive";
-                if (dialog.ShowDialog() == DialogResult.OK)
+                if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
                     ClearUIState();
                     _currentZipPath = dialog.FileName;
                     SetStatus($"Loading files from {_currentZipPath}...");
                     _currentSourceType = DataSourceType.LocalZip;
+                    this.Cursor = Cursors.WaitCursor;
 
                     try
                     {
-                        this.Cursor = Cursors.WaitCursor;
                         _zipEntryMap?.Clear();
-
                         var (files, entryMap) = await LocalFileService.GetZipFilesAsync(_currentZipPath);
                         _zipEntryMap = entryMap;
 
@@ -238,17 +258,17 @@ namespace Repo2Text // Add namespace
                     catch (IOException ioEx)
                     {
                         SetStatus($"Error reading ZIP: {ioEx.Message}", true);
-                        txtOutput.Text = $"Error reading ZIP file: {ioEx.Message}\n\nEnsure the file is a valid ZIP archive and not corrupted.";
+                        txtOutput.Text = $"Error reading ZIP file: {ioEx.Message}\nEnsure valid ZIP and not corrupted.";
                     }
                     catch (InvalidDataException invEx)
                     {
                         SetStatus($"Invalid ZIP data: {invEx.Message}", true);
-                        txtOutput.Text = $"Invalid ZIP file format: {invEx.Message}\n\nThe file might be corrupted or not a standard ZIP file.";
+                        txtOutput.Text = $"Invalid ZIP file format: {invEx.Message}\nFile might be corrupted.";
                     }
                     catch (Exception ex)
                     {
                         SetStatus($"Error reading ZIP file: {ex.Message}", true);
-                        txtOutput.Text = $"An unexpected error occurred reading the ZIP file: {ex.Message}";
+                        txtOutput.Text = $"An unexpected error occurred reading ZIP: {ex.Message}";
                     }
                     finally
                     {
@@ -263,9 +283,10 @@ namespace Repo2Text // Add namespace
         {
             SetStatus("Generating text...");
             txtOutput.Text = "";
+            lblTokenCount.Text = "";
+            lblTokenCount.Visible = false;
             btnCopy.Enabled = false;
             btnDownloadText.Enabled = false;
-            // *** FIXED: Use fully qualified name for Application ***
             System.Windows.Forms.Application.DoEvents();
 
             var selectedFiles = GetSelectedFiles(treeViewFiles.Nodes);
@@ -282,6 +303,25 @@ namespace Repo2Text // Add namespace
             {
                 string generatedText = await GenerateFormattedText(selectedFiles);
                 txtOutput.Text = generatedText;
+
+                if (_tokenizer != null && !string.IsNullOrEmpty(generatedText))
+                {
+                    try
+                    {
+                        var tokens = _tokenizer.Encode(generatedText);
+                        UpdateTokenCountLabel(tokens.Count);
+                    }
+                    catch (Exception tokenEx)
+                    {
+                        Console.WriteLine($"Error counting tokens: {tokenEx.Message}");
+                        UpdateTokenCountLabel(-1);
+                    }
+                }
+                else if (_tokenizer == null)
+                {
+                    UpdateTokenCountLabel(-2);
+                }
+
                 SetStatus($"Generated text from {selectedFiles.Count} files.", false);
                 btnCopy.Enabled = true;
                 btnDownloadText.Enabled = true;
@@ -322,7 +362,7 @@ namespace Repo2Text // Add namespace
                 sfd.FileName = $"{_currentRepoInfo.RepoName}_partial.zip";
                 sfd.Title = "Save Selected Files as ZIP";
 
-                if (sfd.ShowDialog() == DialogResult.OK)
+                if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
                     string savePath = sfd.FileName;
                     string token = txtAccessToken.Text.Trim();
@@ -331,7 +371,6 @@ namespace Repo2Text // Add namespace
 
                     try
                     {
-                        // *** FIXED: Use System.IO.FileMode ***
                         using (var fileStream = new FileStream(savePath, System.IO.FileMode.Create))
                         using (var archive = new ZipArchive(fileStream, ZipArchiveMode.Create))
                         {
@@ -339,11 +378,9 @@ namespace Repo2Text // Add namespace
                             {
                                 string fileRef = _currentRepoInfo.ResolvedRef;
                                 string content = await GitHubService.GetFileContentAsync(
-                                    _currentRepoInfo.Owner,
-                                    _currentRepoInfo.RepoName,
+                                    _currentRepoInfo.Owner, _currentRepoInfo.RepoName,
                                     fileItem.Path,
-                                    fileRef,
-                                    token);
+                                    fileRef, token);
 
                                 string entryPath = fileItem.DisplayPath.TrimStart('/');
 
@@ -393,8 +430,13 @@ namespace Repo2Text // Add namespace
             {
                 try
                 {
-                    Clipboard.SetText(txtOutput.Text);
+                    Clipboard.SetText(txtOutput.Text, TextDataFormat.UnicodeText);
                     SetStatus("Text copied to clipboard.", false);
+                }
+                catch (System.Runtime.InteropServices.ExternalException ex)
+                {
+                    SetStatus($"Error copying text: Clipboard unavailable. {ex.Message}", true);
+                    MessageBox.Show($"Could not copy text to clipboard. It might be in use by another application.\n\nError: {ex.Message}", "Copy Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 catch (Exception ex)
                 {
@@ -417,7 +459,7 @@ namespace Repo2Text // Add namespace
                 sfd.Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*";
                 sfd.FileName = "repo_content.txt";
                 sfd.Title = "Save Generated Text";
-                if (sfd.ShowDialog() == DialogResult.OK)
+                if (sfd.ShowDialog(this) == DialogResult.OK)
                 {
                     try
                     {
@@ -437,89 +479,229 @@ namespace Repo2Text // Add namespace
             }
         }
 
-        // --- TreeView Checkbox Handling ---
         private void treeViewFiles_AfterCheck(object sender, TreeViewEventArgs e)
         {
-            if (_isUpdatingCheckState) return;
-            _isUpdatingCheckState = true;
+            if (_isUpdatingTreeViewProgrammatically) return;
+
+            _isUpdatingTreeViewProgrammatically = true;
             try
             {
-                CheckChildrenRecursive(e.Node, e.Node.Checked);
-                UpdateParentCheckState(e.Node.Parent);
+                SetChildNodeState(e.Node, e.Node.Checked);
+                SetParentNodeState(e.Node.Parent);
+
+                if (!_isUpdatingExtensionsProgrammatically)
+                {
+                    UpdateExtensionCheckStates();
+                }
             }
             finally
             {
-                _isUpdatingCheckState = false;
+                _isUpdatingTreeViewProgrammatically = false;
             }
         }
 
-        private void CheckChildrenRecursive(TreeNode node, bool isChecked)
+        private void SetChildNodeState(TreeNode node, bool isChecked)
         {
             foreach (TreeNode childNode in node.Nodes)
             {
                 if (childNode.Checked != isChecked)
                 {
                     childNode.Checked = isChecked;
-                    // Check grandchildren ONLY if we're explicitly checking recursively here.
-                    // If relying on the event, this recursive call is not needed.
-                    // CheckChildrenRecursive(childNode, isChecked);
                 }
             }
         }
 
-        // *** ENSURE THIS METHOD EXISTS WITHIN THE MainForm CLASS ***
-        private void UpdateParentCheckState(TreeNode parentNode)
+        private void SetParentNodeState(TreeNode parentNode)
         {
-            if (parentNode == null) return; // No parent
+            if (parentNode == null) return;
 
             int checkedCount = 0;
             int uncheckedCount = 0;
 
             foreach (TreeNode childNode in parentNode.Nodes)
             {
-                if (childNode.Checked)
-                {
-                    checkedCount++;
-                }
-                else
-                {
-                    uncheckedCount++;
-                }
+                if (childNode.Checked) checkedCount++;
+                else uncheckedCount++;
             }
 
             bool newState;
-            if (checkedCount == parentNode.Nodes.Count)
-            {
-                newState = true; // All children checked
-            }
-            else if (uncheckedCount == parentNode.Nodes.Count)
-            {
-                newState = false; // All children unchecked
-            }
-            else
-            {
-                newState = false; // Mixed state - Treat as unchecked visually
-            }
+            if (checkedCount == parentNode.Nodes.Count) newState = true;
+            else if (uncheckedCount == parentNode.Nodes.Count) newState = false;
+            else newState = false;
 
             if (parentNode.Checked != newState)
             {
-                parentNode.Checked = newState; // This will trigger AfterCheck for the parent
+                parentNode.Checked = newState;
             }
-
-            // We don't need to explicitly recurse here anymore because setting
-            // parentNode.Checked = newState will trigger its AfterCheck event,
-            // which will then call UpdateParentCheckState for *its* parent.
-            // UpdateParentCheckState(parentNode.Parent); // REMOVE THIS RECURSIVE CALL HERE
         }
 
+        private void CreateExtensionFiltersUI()
+        {
+            flowLayoutPanelExtensions.Controls.Clear();
+            flowLayoutPanelExtensions.SuspendLayout();
 
-        // --- UI and Logic Helper Methods ---
+            if (!_extensionTreeNodes.Any())
+            {
+                flowLayoutPanelExtensions.Visible = false;
+                flowLayoutPanelExtensions.ResumeLayout();
+                return;
+            }
+
+            var sortedExtensions = _extensionTreeNodes.Keys.OrderBy(ext => ext).ToList();
+
+            foreach (string ext in sortedExtensions)
+            {
+                var chk = new CheckBox
+                {
+                    Text = "." + ext,
+                    Tag = ext,
+                    AutoSize = true,
+                    ThreeState = true,
+                    Margin = new Padding(3, 3, 10, 3)
+                };
+                chk.CheckStateChanged += ExtensionCheckBox_CheckStateChanged;
+                flowLayoutPanelExtensions.Controls.Add(chk);
+            }
+
+            flowLayoutPanelExtensions.Visible = true;
+            flowLayoutPanelExtensions.ResumeLayout();
+            UpdateExtensionCheckStates();
+        }
+
+        private void ExtensionCheckBox_CheckStateChanged(object sender, EventArgs e)
+        {
+            if (_isUpdatingExtensionsProgrammatically || _isUpdatingTreeViewProgrammatically) return;
+
+            var chk = sender as CheckBox;
+            if (chk == null || chk.Tag == null) return;
+
+            string extension = chk.Tag.ToString();
+            CheckState userClickedState = chk.CheckState;
+            bool targetCheckedState = (userClickedState == CheckState.Checked);
+
+            if (_extensionTreeNodes.TryGetValue(extension, out var nodesToUpdate))
+            {
+                _isUpdatingTreeViewProgrammatically = true;
+                _isUpdatingExtensionsProgrammatically = true;
+
+                treeViewFiles.BeginUpdate();
+                try
+                {
+                    foreach (var node in nodesToUpdate)
+                    {
+                        if (node.Checked != targetCheckedState)
+                        {
+                            node.Checked = targetCheckedState;
+                        }
+                    }
+                    foreach (TreeNode rootNode in treeViewFiles.Nodes)
+                    {
+                        UpdateAllParentStatesBottomUp(rootNode);
+                    }
+                }
+                finally
+                {
+                    treeViewFiles.EndUpdate();
+                    _isUpdatingTreeViewProgrammatically = false;
+                    _isUpdatingExtensionsProgrammatically = false;
+                }
+                UpdateExtensionCheckStates();
+            }
+        }
+
+        private void UpdateAllParentStatesBottomUp(TreeNode node)
+        {
+            foreach (TreeNode child in node.Nodes)
+            {
+                UpdateAllParentStatesBottomUp(child);
+            }
+            UpdateParentCheckStateOnly(node);
+        }
+
+        private void UpdateParentCheckStateOnly(TreeNode parentNode)
+        {
+            if (parentNode == null || parentNode.Nodes.Count == 0) return;
+
+            int checkedCount = 0;
+            int uncheckedCount = 0;
+
+            foreach (TreeNode childNode in parentNode.Nodes)
+            {
+                if (childNode.Checked) checkedCount++;
+                else uncheckedCount++;
+            }
+
+            bool newState;
+            if (checkedCount == parentNode.Nodes.Count) newState = true;
+            else if (uncheckedCount == parentNode.Nodes.Count) newState = false;
+            else newState = false;
+
+            if (parentNode.Checked != newState)
+            {
+                bool wasUpdating = _isUpdatingTreeViewProgrammatically;
+                _isUpdatingTreeViewProgrammatically = true;
+                parentNode.Checked = newState;
+                _isUpdatingTreeViewProgrammatically = wasUpdating;
+            }
+        }
+
+        private void UpdateExtensionCheckStates()
+        {
+            if (_isUpdatingExtensionsProgrammatically) return;
+            _isUpdatingExtensionsProgrammatically = true;
+            flowLayoutPanelExtensions.SuspendLayout();
+
+            try
+            {
+                foreach (Control c in flowLayoutPanelExtensions.Controls)
+                {
+                    if (c is CheckBox chk && chk.Tag is string extension)
+                    {
+                        if (_extensionTreeNodes.TryGetValue(extension, out var associatedNodes))
+                        {
+                            int checkedCount = 0;
+                            int uncheckedCount = 0;
+                            int totalCount = associatedNodes.Count;
+
+                            if (totalCount > 0)
+                            {
+                                foreach (var node in associatedNodes)
+                                {
+                                    if (node.Checked) checkedCount++;
+                                    else uncheckedCount++;
+                                }
+
+                                CheckState newState;
+                                if (checkedCount == totalCount) newState = CheckState.Checked;
+                                else if (uncheckedCount == totalCount) newState = CheckState.Unchecked;
+                                else newState = CheckState.Indeterminate;
+
+                                if (chk.CheckState != newState) chk.CheckState = newState;
+                                if (!chk.Enabled) chk.Enabled = true;
+                            }
+                            else
+                            {
+                                if (chk.CheckState != CheckState.Unchecked) chk.CheckState = CheckState.Unchecked;
+                                if (chk.Enabled) chk.Enabled = false;
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                flowLayoutPanelExtensions.ResumeLayout();
+                _isUpdatingExtensionsProgrammatically = false;
+            }
+        }
 
         private void ClearUIState()
         {
             treeViewFiles.Nodes.Clear();
             txtOutput.Text = "";
-            SetStatus("Ready.", false); // Set initial status
+            SetStatus("Ready.", false);
+            lblTokenCount.Text = "";
+            lblTokenCount.Visible = false;
             btnGenerateText.Enabled = false;
             btnCopy.Enabled = false;
             btnDownloadText.Enabled = false;
@@ -529,150 +711,118 @@ namespace Repo2Text // Add namespace
             _currentZipPath = null;
             _zipEntryMap?.Clear();
             _zipEntryMap = null;
+            _extensionTreeNodes.Clear();
+            flowLayoutPanelExtensions.Controls.Clear();
+            flowLayoutPanelExtensions.Visible = false;
         }
 
         private void SetStatus(string message, bool isError = false)
         {
-            // *** FIXED: Check if lblStatus exists and is accessible ***
-            // Ensure lblStatus is the correct name of your Label control added in the designer.
-            if (lblStatus == null)
-            {
-                Console.WriteLine($"Status Control Error: lblStatus is null. Message: {message}");
-                return;
-            }
-
-            if (lblStatus.InvokeRequired)
-            {
-                lblStatus.Invoke(new Action(() => SetStatus(message, isError)));
-            }
+            if (lblStatus == null) { Console.WriteLine($"Status Label Missing! Msg: {message}"); return; }
+            if (lblStatus.InvokeRequired) { lblStatus.Invoke(new Action(() => { SetStatus(message, isError); })); }
             else
             {
                 lblStatus.Text = message;
-                lblStatus.ForeColor = isError ? System.Drawing.Color.Red : System.Drawing.SystemColors.ControlText;
-                Console.WriteLine($"Status: {message}" + (isError ? " (Error)" : ""));
+                lblStatus.ForeColor = isError ? Color.Red : SystemColors.ControlText;
             }
+            Console.WriteLine($"Status: {message}" + (isError ? " (Error)" : ""));
         }
 
         private void PopulateTreeView(List<FileItem> items)
         {
             treeViewFiles.Nodes.Clear();
+            _extensionTreeNodes.Clear();
+
             if (!items.Any())
             {
-                SetStatus("No files found in the source.", false);
+                SetStatus("No files found or none remaining after filtering.", false);
+                CreateExtensionFiltersUI();
                 return;
             }
 
+            _isUpdatingTreeViewProgrammatically = true;
             treeViewFiles.BeginUpdate();
 
-            var rootNode = new TreeNode("Source Root") { Tag = "ROOT_NODE_TAG" };
-            treeViewFiles.Nodes.Add(rootNode);
-
             var nodeLookup = new Dictionary<string, TreeNode>();
-            nodeLookup[""] = rootNode;
-
-            // Sort primarily by path depth, then by type (dir first), then name
-            items.Sort((a, b) => {
-                int depthA = a.DisplayPath.Split('/', '\\').Length;
-                int depthB = b.DisplayPath.Split('/', '\\').Length;
-                if (depthA != depthB) return depthA.CompareTo(depthB);
-                if (a.IsDirectory != b.IsDirectory) return a.IsDirectory ? -1 : 1; // Directories first (though we add files first below)
-                return string.Compare(a.DisplayPath, b.DisplayPath, StringComparison.OrdinalIgnoreCase);
-            });
-
+            items.Sort((a, b) => string.Compare(a.DisplayPath, b.DisplayPath, StringComparison.OrdinalIgnoreCase));
 
             foreach (var item in items)
             {
-                string parentPathKey = Path.GetDirectoryName(item.DisplayPath)?.Replace('\\', '/') ?? "";
-                string name = Path.GetFileName(item.DisplayPath);
-                string currentNodeKey = item.DisplayPath.Replace('\\', '/');
+                string currentPath = "";
+                TreeNode parentNode = null;
+                var pathParts = item.DisplayPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
 
-                if (string.IsNullOrEmpty(name)) name = item.DisplayPath; // Handle root-level items
-
-                TreeNode parentNode;
-                if (!nodeLookup.TryGetValue(parentPathKey, out parentNode))
+                for (int i = 0; i < pathParts.Length; i++)
                 {
-                    // If parent doesn't exist, create it recursively. This builds the directory structure implicitly.
-                    parentNode = FindOrCreateParentNode(rootNode, nodeLookup, parentPathKey, item.SourceType);
-                    if (parentNode == null)
+                    bool isLastPart = (i == pathParts.Length - 1);
+                    string part = pathParts[i];
+                    string nodeKey = string.IsNullOrEmpty(currentPath) ? part : $"{currentPath}/{part}";
+                    TreeNodeCollection currentNodeCollection = (parentNode == null) ? treeViewFiles.Nodes : parentNode.Nodes;
+                    TreeNode existingNode = FindNodeByText(currentNodeCollection, part);
+                    TreeNode newNode = null;
+
+                    if (existingNode == null)
                     {
-                        Console.WriteLine($"Warning: Could not find/create parent '{parentPathKey}' for '{name}'. Adding to root.");
-                        parentNode = rootNode;
+                        newNode = new TreeNode(part);
+                        if (isLastPart)
+                        {
+                            newNode.Tag = item; newNode.Checked = !item.IsDirectory;
+                        }
+                        else
+                        {
+                            newNode.Tag = new FileItem { Name = part, Path = nodeKey, DisplayPath = nodeKey, IsDirectory = true, SourceType = item.SourceType };
+                            newNode.Checked = false;
+                        }
+                        currentNodeCollection.Add(newNode);
+                        nodeLookup[nodeKey] = newNode;
+                        parentNode = newNode;
+                        if (isLastPart && !item.IsDirectory) AddNodeToExtensionMap(newNode);
                     }
-                }
-
-                // Avoid adding duplicates if path normalization leads to collisions
-                if (!nodeLookup.ContainsKey(currentNodeKey))
-                {
-                    var newNode = new TreeNode(name)
+                    else
                     {
-                        Tag = item,
-                        // Example: Check files by default
-                        Checked = !item.IsDirectory
-                    };
-                    parentNode.Nodes.Add(newNode);
-                    nodeLookup[currentNodeKey] = newNode;
-                }
-                else
-                {
-                    // Node already exists (likely a directory created implicitly), update its tag if this is the actual file item
-                    if (!item.IsDirectory && nodeLookup[currentNodeKey].Tag is FileItem existingTag && existingTag.IsDirectory)
-                    {
-                        nodeLookup[currentNodeKey].Tag = item;
-                        nodeLookup[currentNodeKey].Checked = true; // Check the file node
+                        parentNode = existingNode;
+                        if (isLastPart && !item.IsDirectory && parentNode.Tag is FileItem existingFileTag && existingFileTag.IsDirectory)
+                        {
+                            parentNode.Tag = item; parentNode.Checked = true; AddNodeToExtensionMap(parentNode);
+                        }
+                        else if (!isLastPart && parentNode.Tag is FileItem tag && !tag.IsDirectory)
+                        {
+                            Console.WriteLine($"Path conflict: Item '{item.DisplayPath}' requires directory '{part}', but a file node already exists.");
+                            parentNode = null; break;
+                        }
                     }
                 }
             }
 
-            // Set initial parent check states after all nodes are added
-            _isUpdatingCheckState = true;
-            UpdateCheckStatesFromBottom(rootNode); // Update starting from the root
-            _isUpdatingCheckState = false;
+            foreach (TreeNode node in treeViewFiles.Nodes) UpdateAllParentStatesBottomUp(node);
 
-            rootNode.Expand();
-            // Optionally expand only the first level of real folders/files
-            if (rootNode.Nodes.Count > 0)
-            {
-                foreach (TreeNode node in rootNode.Nodes) node.Expand();
-            }
+            CreateExtensionFiltersUI();
 
+            foreach (TreeNode node in treeViewFiles.Nodes) node.Expand();
 
             treeViewFiles.EndUpdate();
+            _isUpdatingTreeViewProgrammatically = false;
         }
 
-        // Helper to recursively find or create parent nodes
-        private TreeNode FindOrCreateParentNode(TreeNode root, Dictionary<string, TreeNode> lookup, string pathKey, DataSourceType sourceType)
+        private TreeNode FindNodeByText(TreeNodeCollection nodes, string text)
         {
-            if (string.IsNullOrEmpty(pathKey)) return root;
-            if (lookup.TryGetValue(pathKey, out var existingNode)) return existingNode;
-
-            string parentPathKey = Path.GetDirectoryName(pathKey)?.Replace('\\', '/') ?? "";
-            string name = Path.GetFileName(pathKey);
-            if (string.IsNullOrEmpty(name)) return root; // Cannot create node for empty name
-
-            TreeNode parent = FindOrCreateParentNode(root, lookup, parentPathKey, sourceType);
-            if (parent == null) return null;
-
-            var newNode = new TreeNode(name)
+            foreach (TreeNode node in nodes)
             {
-                Tag = new FileItem { Name = name, Path = pathKey, DisplayPath = pathKey, IsDirectory = true, SourceType = sourceType },
-                Checked = false // Directories start unchecked
-            };
-            parent.Nodes.Add(newNode);
-            lookup[pathKey] = newNode;
-            return newNode;
-        }
-
-        // Helper to update parent check states after initial population
-        private void UpdateCheckStatesFromBottom(TreeNode node)
-        {
-            foreach (TreeNode child in node.Nodes)
-            {
-                UpdateCheckStatesFromBottom(child);
+                if (node.Text.Equals(text, StringComparison.OrdinalIgnoreCase)) { return node; }
             }
-            // Only call the state update logic if it's not the virtual root node
-            if (node.Parent != null)
+            return null;
+        }
+
+        private void AddNodeToExtensionMap(TreeNode fileNode)
+        {
+            if (fileNode.Tag is FileItem item && !item.IsDirectory)
             {
-                UpdateParentCheckState(node);
+                string extension = Path.GetExtension(item.Name).TrimStart('.').ToLowerInvariant();
+                if (!string.IsNullOrEmpty(extension))
+                {
+                    if (!_extensionTreeNodes.ContainsKey(extension)) _extensionTreeNodes[extension] = new List<TreeNode>();
+                    if (!_extensionTreeNodes[extension].Contains(fileNode)) _extensionTreeNodes[extension].Add(fileNode);
+                }
             }
         }
 
@@ -681,26 +831,18 @@ namespace Repo2Text // Add namespace
             var selected = new List<FileItem>();
             foreach (TreeNode node in nodes)
             {
-                // Only add if it's checked AND represents a file
-                if (node.Checked && node.Tag is FileItem item && !item.IsDirectory)
-                {
-                    selected.Add(item);
-                }
-                // Recurse into children even if parent isn't fully checked
-                if (node.Nodes.Count > 0)
-                {
-                    selected.AddRange(GetSelectedFiles(node.Nodes));
-                }
+                if (node.Checked && node.Tag is FileItem item && !item.IsDirectory) selected.Add(item);
+                if (node.Nodes.Count > 0) selected.AddRange(GetSelectedFiles(node.Nodes));
             }
-            return selected.Distinct().ToList(); // Use Distinct for safety
+            return selected.Distinct().ToList();
         }
 
         private async Task<string> GenerateFormattedText(List<FileItem> selectedFiles)
         {
             var sb = new StringBuilder();
             var indexSb = new StringBuilder("Directory Structure:\n\n");
-
             var root = new Dictionary<string, object>();
+
             foreach (var item in selectedFiles.OrderBy(f => f.DisplayPath))
             {
                 var parts = item.DisplayPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
@@ -709,33 +851,18 @@ namespace Repo2Text // Add namespace
                 {
                     string part = parts[i];
                     bool isLast = (i == parts.Length - 1);
-
-                    if (!currentLevel.ContainsKey(part))
+                    if (!currentLevel.ContainsKey(part)) currentLevel[part] = isLast ? null : new Dictionary<string, object>();
+                    if (!isLast)
                     {
-                        currentLevel[part] = isLast ? null : new Dictionary<string, object>();
-                    }
-
-                    if (!isLast && currentLevel[part] is Dictionary<string, object> subDir)
-                    {
-                        currentLevel = subDir;
-                    }
-                    else if (!isLast && currentLevel[part] == null) // Path conflict: file exists where dir needed
-                    {
-                        // Overwrite the file marker with a directory dictionary
-                        currentLevel[part] = new Dictionary<string, object>();
-                        currentLevel = (Dictionary<string, object>)currentLevel[part];
-                    }
-                    else if (!isLast && currentLevel[part] is Dictionary<string, object>)
-                    {
-                        // Already exists as dictionary, just descend
-                        currentLevel = (Dictionary<string, object>)currentLevel[part];
+                        if (currentLevel[part] == null) currentLevel[part] = new Dictionary<string, object>();
+                        if (currentLevel[part] is Dictionary<string, object> subDir) currentLevel = subDir;
+                        else { Console.WriteLine($"Type error for part '{part}'."); break; }
                     }
                 }
             }
             BuildIndexStringRecursive(root, indexSb, "", true);
             sb.Append(indexSb.ToString());
             sb.AppendLine();
-
 
             string token = txtAccessToken.Text.Trim();
             foreach (var file in selectedFiles.OrderBy(f => f.Path))
@@ -748,8 +875,7 @@ namespace Repo2Text // Add namespace
                         case DataSourceType.GitHub:
                             if (_currentRepoInfo == null || !_currentRepoInfo.IsValid || string.IsNullOrEmpty(_currentRepoInfo.ResolvedRef))
                             {
-                                content = $"Error: GitHub repository info is missing or invalid for {file.Path}.";
-                                break;
+                                content = $"Error: GitHub repo info missing/invalid for {file.Path}."; break;
                             }
                             content = await GitHubService.GetFileContentAsync(
                                 _currentRepoInfo.Owner, _currentRepoInfo.RepoName,
@@ -761,29 +887,18 @@ namespace Repo2Text // Add namespace
                         case DataSourceType.LocalZip:
                             if (string.IsNullOrEmpty(_currentZipPath))
                             {
-                                content = $"Error: ZIP path is missing for {file.Path}.";
-                                break;
+                                content = $"Error: ZIP path missing for {file.Path}."; break;
                             }
                             try
                             {
                                 using (var archive = ZipFile.OpenRead(_currentZipPath))
                                 {
-                                    // SourceUrl stored the entry FullName
                                     var entry = archive.GetEntry(file.SourceUrl);
-                                    if (entry != null)
-                                    {
-                                        content = await LocalFileService.ReadZipEntryContentAsync(entry);
-                                    }
-                                    else
-                                    {
-                                        content = $"Error: ZIP entry not found ({file.Path}) in archive.";
-                                    }
+                                    if (entry != null) content = await LocalFileService.ReadZipEntryContentAsync(entry);
+                                    else content = $"Error: ZIP entry not found ({file.Path}).";
                                 }
                             }
-                            catch (Exception zipEx)
-                            {
-                                content = $"Error reading ZIP entry for {file.Path}: {zipEx.Message}";
-                            }
+                            catch (Exception zipEx) { content = $"Error reading ZIP entry for {file.Path}: {zipEx.Message}"; }
                             break;
                     }
                 }
@@ -792,19 +907,11 @@ namespace Repo2Text // Add namespace
                     content = $"Error processing {file.DisplayPath}: {ex.Message}";
                     Console.WriteLine(content);
                 }
-
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine($"File: /{file.DisplayPath.TrimStart('/')}");
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine(content ?? $"Error: Content for {file.DisplayPath} was null or could not be read.");
+                sb.AppendLine().AppendLine("---").AppendLine($"File: /{file.DisplayPath.TrimStart('/')}").AppendLine("---").AppendLine().AppendLine(content ?? $"Error: Content for {file.DisplayPath} was null.");
             }
-
             return sb.ToString();
         }
 
-        // Recursive helper for building index string
         private void BuildIndexStringRecursive(Dictionary<string, object> directory, StringBuilder output, string prefix, bool isRoot = false)
         {
             var entries = directory.OrderBy(kvp => kvp.Key).ToList();
@@ -812,12 +919,9 @@ namespace Repo2Text // Add namespace
             {
                 var kvp = entries[i];
                 bool isLast = (i == entries.Count - 1);
-
                 string connector = isLast ? "└── " : "├── ";
                 string name = kvp.Key;
-
                 output.Append(prefix + connector + name + Environment.NewLine);
-
                 if (kvp.Value is Dictionary<string, object> subDirectory)
                 {
                     string childPrefix = prefix + (isLast ? "    " : "│   ");
@@ -826,5 +930,20 @@ namespace Repo2Text // Add namespace
             }
         }
 
-    } // End of MainForm class
-} // End of namespace
+        private void UpdateTokenCountLabel(int count)
+        {
+            if (lblTokenCount == null) return;
+            if (lblTokenCount.InvokeRequired) { lblTokenCount.Invoke(new Action(() => UpdateTokenCountLabel(count))); }
+            else
+            {
+                string textToShow; Color textColor = SystemColors.ControlText; bool visible = true;
+                if (count == -1) { textToShow = "Token count failed."; textColor = Color.OrangeRed; }
+                else if (count == -2) { textToShow = "Tokenizer unavailable."; textColor = Color.OrangeRed; }
+                else if (count >= 0) { textToShow = $"Approximate Token Count: {count:N0} (cl100k_base)"; }
+                else { textToShow = ""; visible = false; }
+                lblTokenCount.Text = textToShow; lblTokenCount.ForeColor = textColor; lblTokenCount.Visible = visible;
+            }
+        }
+
+    }
+}
