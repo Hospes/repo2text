@@ -484,11 +484,30 @@ namespace Repo2Text
             if (_isUpdatingTreeViewProgrammatically) return;
 
             _isUpdatingTreeViewProgrammatically = true;
+            treeViewFiles.BeginUpdate(); // Improves performance for multiple updates
+
             try
             {
+                // 1. Propagate the change downwards to all children and their descendants
                 SetChildNodeState(e.Node, e.Node.Checked);
-                SetParentNodeState(e.Node.Parent);
 
+                // 2. Propagate the change upwards to all parents
+                TreeNode parent = e.Node.Parent;
+                while (parent != null)
+                {
+                    bool oldParentState = parent.Checked;
+                    UpdateParentCheckStateOnly(parent); // This method calculates and sets parent's state
+                                                        // and handles the _isUpdatingTreeViewProgrammatically flag
+                                                        // correctly if parent.Checked is changed.
+
+                    if (parent.Checked == oldParentState) // Optimization: if parent's state didn't change, no need to go higher
+                    {
+                        break;
+                    }
+                    parent = parent.Parent;
+                }
+
+                // 3. After all tree changes, update the extension filter checkboxes
                 if (!_isUpdatingExtensionsProgrammatically)
                 {
                     UpdateExtensionCheckStates();
@@ -496,6 +515,7 @@ namespace Repo2Text
             }
             finally
             {
+                treeViewFiles.EndUpdate(); // Resume TreeView updates
                 _isUpdatingTreeViewProgrammatically = false;
             }
         }
@@ -508,30 +528,7 @@ namespace Repo2Text
                 {
                     childNode.Checked = isChecked;
                 }
-            }
-        }
-
-        private void SetParentNodeState(TreeNode parentNode)
-        {
-            if (parentNode == null) return;
-
-            int checkedCount = 0;
-            int uncheckedCount = 0;
-
-            foreach (TreeNode childNode in parentNode.Nodes)
-            {
-                if (childNode.Checked) checkedCount++;
-                else uncheckedCount++;
-            }
-
-            bool newState;
-            if (checkedCount == parentNode.Nodes.Count) newState = true;
-            else if (uncheckedCount == parentNode.Nodes.Count) newState = false;
-            else newState = false;
-
-            if (parentNode.Checked != newState)
-            {
-                parentNode.Checked = newState;
+                SetChildNodeState(childNode, isChecked);
             }
         }
 
