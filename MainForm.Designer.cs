@@ -201,11 +201,11 @@
             flowLayoutPanelExtensions.AutoSize = true;
             flowLayoutPanelExtensions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             flowLayoutPanelExtensions.BorderStyle = BorderStyle.FixedSingle;
-            flowLayoutPanelExtensions.Dock = DockStyle.Fill;
+            flowLayoutPanelExtensions.Dock = DockStyle.Top;
             flowLayoutPanelExtensions.Location = new Point(0, 0);
             flowLayoutPanelExtensions.Name = "flowLayoutPanelExtensions";
             flowLayoutPanelExtensions.Padding = new Padding(3);
-            flowLayoutPanelExtensions.Size = new Size(754, 30);
+            flowLayoutPanelExtensions.Size = new Size(754, 8);
             flowLayoutPanelExtensions.TabIndex = 15;
             // 
             // splitContainer1
@@ -238,6 +238,7 @@
             // 
             // splitContainer2.Panel1
             // 
+            splitContainer2.Panel1.AutoScroll = true;
             splitContainer2.Panel1.Controls.Add(flowLayoutPanelExtensions);
             // 
             // splitContainer2.Panel2

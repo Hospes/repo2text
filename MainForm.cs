@@ -28,12 +28,18 @@ namespace Repo2Text
         private bool _isUpdatingTreeViewProgrammatically = false;
         private bool _isUpdatingExtensionsProgrammatically = false;
 
+        private bool _isProgrammaticallyAdjustingSplitter = false;
+
+
         public MainForm()
         {
             InitializeComponent();
             InitializeTokenizer();
             LoadSettings();
             AttachEventHandlers();
+
+            // Add the new event handler for dynamic splitter adjustment
+            this.flowLayoutPanelExtensions.SizeChanged += FlowLayoutPanelExtensions_SizeChanged;
         }
 
         private static void InitializeTokenizer()
@@ -942,5 +948,66 @@ namespace Repo2Text
             }
         }
 
+        private void FlowLayoutPanelExtensions_SizeChanged(object sender, EventArgs e)
+        {
+            // Guard against calls during design-time, disposal, when the handle isn't created, or recursive calls.
+            if (this.DesignMode || this.IsDisposed || !this.IsHandleCreated || _isProgrammaticallyAdjustingSplitter)
+            {
+                return;
+            }
+
+            FlowLayoutPanel flp = sender as FlowLayoutPanel;
+            // Ensure splitContainer2 and flp are valid.
+            if (flp != null && splitContainer2 != null)
+            {
+                _isProgrammaticallyAdjustingSplitter = true;
+                try
+                {
+                    // With DockStyle.Top and AutoSize=true, flp.Height is its desired height.
+                    int newSplitterTargetHeight = flp.Height;
+
+                    // Min/Max for Panel1 height based on SplitContainer constraints
+                    int panel1Min = splitContainer2.Panel1MinSize;
+                    // Panel2 must have at least Panel2MinSize height.
+                    // So, Panel1 can be at most splitContainer2.Height - splitContainer2.Panel2MinSize.
+                    // Use ClientSize.Height for the container's content area height.
+                    int panel1Max = splitContainer2.ClientSize.Height - splitContainer2.Panel2MinSize;
+
+                    // Ensure panel1Max is not less than panel1Min (can happen if container is too small).
+                    if (panel1Max < panel1Min)
+                    {
+                        panel1Max = panel1Min;
+                    }
+
+                    // Clamp the target height for the splitter distance.
+                    int newSplitterDistance = Math.Max(panel1Min, Math.Min(newSplitterTargetHeight, panel1Max));
+
+                    // Only set if it's a meaningful change and the values are valid.
+                    // newSplitterDistance must be positive and less than the total container height
+                    // to ensure Panel2 has some space (though panel1Max should already guarantee this).
+                    if (newSplitterDistance > 0 &&
+                        newSplitterDistance < splitContainer2.ClientSize.Height &&
+                        splitContainer2.SplitterDistance != newSplitterDistance)
+                    {
+                        // Further check: Ensure the container itself has enough space for this operation.
+                        if (splitContainer2.ClientSize.Height >= (splitContainer2.Panel1MinSize + splitContainer2.Panel2MinSize))
+                        {
+                            splitContainer2.SplitterDistance = newSplitterDistance;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // It's generally better not to crash the UI for layout adjustments.
+                    // Log this for debugging. Consider using System.Diagnostics.Debug.WriteLine for non-release builds.
+                    Console.WriteLine($"Error in FlowLayoutPanelExtensions_SizeChanged: {ex.Message}");
+                }
+                finally
+                {
+                    // Crucial to reset the flag, even if an exception occurred.
+                    _isProgrammaticallyAdjustingSplitter = false;
+                }
+            }
+        }
     }
 }
