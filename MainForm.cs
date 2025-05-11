@@ -24,12 +24,9 @@ namespace Repo2Text
         private static GptEncoding _tokenizer;
         private Dictionary<string, List<TreeNode>> _extensionTreeNodes = new Dictionary<string, List<TreeNode>>(StringComparer.OrdinalIgnoreCase);
 
-        // --- Corrected Flag Declaration ---
         private bool _isUpdatingTreeViewProgrammatically = false;
         private bool _isUpdatingExtensionsProgrammatically = false;
-
         private bool _isProgrammaticallyAdjustingSplitter = false;
-
 
         public MainForm()
         {
@@ -37,9 +34,11 @@ namespace Repo2Text
             InitializeTokenizer();
             LoadSettings();
             AttachEventHandlers();
-
-            // Add the new event handler for dynamic splitter adjustment
             this.flowLayoutPanelExtensions.SizeChanged += FlowLayoutPanelExtensions_SizeChanged;
+
+            this.splitContainer3.FixedPanel = System.Windows.Forms.FixedPanel.Panel2;
+            this.splitContainer3.IsSplitterFixed = true;
+            this.splitContainer3.Panel2MinSize = 75;
         }
 
         private static void InitializeTokenizer()
@@ -199,7 +198,6 @@ namespace Repo2Text
             }
         }
 
-
         private async void btnSelectDirectory_Click(object sender, EventArgs e)
         {
             using (var dialog = new FolderBrowserDialog())
@@ -283,7 +281,6 @@ namespace Repo2Text
                 }
             }
         }
-
 
         private async void btnGenerateText_Click(object sender, EventArgs e)
         {
@@ -487,42 +484,53 @@ namespace Repo2Text
 
         private void treeViewFiles_AfterCheck(object sender, TreeViewEventArgs e)
         {
-            if (_isUpdatingTreeViewProgrammatically) return;
-
-            _isUpdatingTreeViewProgrammatically = true;
-            treeViewFiles.BeginUpdate(); // Improves performance for multiple updates
-
-            try
+            if (_isUpdatingTreeViewProgrammatically)
             {
-                // 1. Propagate the change downwards to all children and their descendants
-                SetChildNodeState(e.Node, e.Node.Checked);
-
-                // 2. Propagate the change upwards to all parents
-                TreeNode parent = e.Node.Parent;
-                while (parent != null)
-                {
-                    bool oldParentState = parent.Checked;
-                    UpdateParentCheckStateOnly(parent); // This method calculates and sets parent's state
-                                                        // and handles the _isUpdatingTreeViewProgrammatically flag
-                                                        // correctly if parent.Checked is changed.
-
-                    if (parent.Checked == oldParentState) // Optimization: if parent's state didn't change, no need to go higher
-                    {
-                        break;
-                    }
-                    parent = parent.Parent;
-                }
-
-                // 3. After all tree changes, update the extension filter checkboxes
-                if (!_isUpdatingExtensionsProgrammatically)
-                {
-                    UpdateExtensionCheckStates();
-                }
+                return;
             }
-            finally
+
+            if (e.Action == TreeViewAction.ByMouse || e.Action == TreeViewAction.ByKeyboard)
             {
-                treeViewFiles.EndUpdate(); // Resume TreeView updates
-                _isUpdatingTreeViewProgrammatically = false;
+                if (e.Node == null) return;
+
+                _isUpdatingTreeViewProgrammatically = true;
+                treeViewFiles.BeginUpdate();
+
+                try
+                {
+                    TreeNode clickedNode = e.Node;
+                    bool newCheckedStateFromUser = clickedNode.Checked;
+
+                    SetChildNodeState(clickedNode, newCheckedStateFromUser);
+
+                    TreeNode parent = clickedNode.Parent;
+                    while (parent != null)
+                    {
+                        bool oldParentState = parent.Checked;
+                        UpdateParentCheckStateOnly(parent);
+
+                        if (parent.Checked == oldParentState)
+                        {
+                            break;
+                        }
+                        parent = parent.Parent;
+                    }
+
+                    if (!_isUpdatingExtensionsProgrammatically)
+                    {
+                        UpdateExtensionCheckStates();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error in treeViewFiles_AfterCheck: {ex.Message}");
+                    SetStatus($"Error updating tree: {ex.Message}", true);
+                }
+                finally
+                {
+                    treeViewFiles.EndUpdate();
+                    _isUpdatingTreeViewProgrammatically = false;
+                }
             }
         }
 
@@ -535,6 +543,40 @@ namespace Repo2Text
                     childNode.Checked = isChecked;
                 }
                 SetChildNodeState(childNode, isChecked);
+            }
+        }
+
+        private void UpdateParentCheckStateOnly(TreeNode parentNode)
+        {
+            if (parentNode == null || parentNode.Nodes.Count == 0) return;
+
+            int checkedCount = 0;
+
+            foreach (TreeNode childNode in parentNode.Nodes)
+            {
+                if (childNode.Checked)
+                {
+                    checkedCount++;
+                }
+            }
+
+            bool newCheckedState;
+            if (checkedCount == parentNode.Nodes.Count)
+            {
+                newCheckedState = true;
+            }
+            else if (checkedCount == 0)
+            {
+                newCheckedState = false;
+            }
+            else
+            {
+                newCheckedState = false;
+            }
+
+            if (parentNode.Checked != newCheckedState)
+            {
+                parentNode.Checked = newCheckedState;
             }
         }
 
@@ -619,33 +661,6 @@ namespace Repo2Text
                 UpdateAllParentStatesBottomUp(child);
             }
             UpdateParentCheckStateOnly(node);
-        }
-
-        private void UpdateParentCheckStateOnly(TreeNode parentNode)
-        {
-            if (parentNode == null || parentNode.Nodes.Count == 0) return;
-
-            int checkedCount = 0;
-            int uncheckedCount = 0;
-
-            foreach (TreeNode childNode in parentNode.Nodes)
-            {
-                if (childNode.Checked) checkedCount++;
-                else uncheckedCount++;
-            }
-
-            bool newState;
-            if (checkedCount == parentNode.Nodes.Count) newState = true;
-            else if (uncheckedCount == parentNode.Nodes.Count) newState = false;
-            else newState = false;
-
-            if (parentNode.Checked != newState)
-            {
-                bool wasUpdating = _isUpdatingTreeViewProgrammatically;
-                _isUpdatingTreeViewProgrammatically = true;
-                parentNode.Checked = newState;
-                _isUpdatingTreeViewProgrammatically = wasUpdating;
-            }
         }
 
         private void UpdateExtensionCheckStates()
@@ -950,46 +965,32 @@ namespace Repo2Text
 
         private void FlowLayoutPanelExtensions_SizeChanged(object sender, EventArgs e)
         {
-            // Guard against calls during design-time, disposal, when the handle isn't created, or recursive calls.
             if (this.DesignMode || this.IsDisposed || !this.IsHandleCreated || _isProgrammaticallyAdjustingSplitter)
             {
                 return;
             }
 
             FlowLayoutPanel flp = sender as FlowLayoutPanel;
-            // Ensure splitContainer2 and flp are valid.
             if (flp != null && splitContainer2 != null)
             {
                 _isProgrammaticallyAdjustingSplitter = true;
                 try
                 {
-                    // With DockStyle.Top and AutoSize=true, flp.Height is its desired height.
                     int newSplitterTargetHeight = flp.Height;
-
-                    // Min/Max for Panel1 height based on SplitContainer constraints
                     int panel1Min = splitContainer2.Panel1MinSize;
-                    // Panel2 must have at least Panel2MinSize height.
-                    // So, Panel1 can be at most splitContainer2.Height - splitContainer2.Panel2MinSize.
-                    // Use ClientSize.Height for the container's content area height.
                     int panel1Max = splitContainer2.ClientSize.Height - splitContainer2.Panel2MinSize;
 
-                    // Ensure panel1Max is not less than panel1Min (can happen if container is too small).
                     if (panel1Max < panel1Min)
                     {
                         panel1Max = panel1Min;
                     }
 
-                    // Clamp the target height for the splitter distance.
                     int newSplitterDistance = Math.Max(panel1Min, Math.Min(newSplitterTargetHeight, panel1Max));
 
-                    // Only set if it's a meaningful change and the values are valid.
-                    // newSplitterDistance must be positive and less than the total container height
-                    // to ensure Panel2 has some space (though panel1Max should already guarantee this).
                     if (newSplitterDistance > 0 &&
                         newSplitterDistance < splitContainer2.ClientSize.Height &&
                         splitContainer2.SplitterDistance != newSplitterDistance)
                     {
-                        // Further check: Ensure the container itself has enough space for this operation.
                         if (splitContainer2.ClientSize.Height >= (splitContainer2.Panel1MinSize + splitContainer2.Panel2MinSize))
                         {
                             splitContainer2.SplitterDistance = newSplitterDistance;
@@ -998,13 +999,10 @@ namespace Repo2Text
                 }
                 catch (Exception ex)
                 {
-                    // It's generally better not to crash the UI for layout adjustments.
-                    // Log this for debugging. Consider using System.Diagnostics.Debug.WriteLine for non-release builds.
                     Console.WriteLine($"Error in FlowLayoutPanelExtensions_SizeChanged: {ex.Message}");
                 }
                 finally
                 {
-                    // Crucial to reset the flag, even if an exception occurred.
                     _isProgrammaticallyAdjustingSplitter = false;
                 }
             }

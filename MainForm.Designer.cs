@@ -46,6 +46,7 @@
             flowLayoutPanelExtensions = new FlowLayoutPanel();
             splitContainer1 = new SplitContainer();
             splitContainer2 = new SplitContainer();
+            splitContainer3 = new SplitContainer();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
@@ -54,6 +55,10 @@
             splitContainer2.Panel1.SuspendLayout();
             splitContainer2.Panel2.SuspendLayout();
             splitContainer2.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)splitContainer3).BeginInit();
+            splitContainer3.Panel1.SuspendLayout();
+            splitContainer3.Panel2.SuspendLayout();
+            splitContainer3.SuspendLayout();
             SuspendLayout();
             // 
             // lblRepoUrl
@@ -120,6 +125,7 @@
             // 
             treeViewFiles.CheckBoxes = true;
             treeViewFiles.Dock = DockStyle.Fill;
+            treeViewFiles.FullRowSelect = true;
             treeViewFiles.Location = new Point(0, 0);
             treeViewFiles.Name = "treeViewFiles";
             treeViewFiles.Size = new Size(754, 425);
@@ -138,7 +144,7 @@
             // btnCopy
             // 
             btnCopy.Enabled = false;
-            btnCopy.Location = new Point(433, 599);
+            btnCopy.Location = new Point(366, 32);
             btnCopy.Name = "btnCopy";
             btnCopy.Size = new Size(170, 23);
             btnCopy.TabIndex = 9;
@@ -148,7 +154,7 @@
             // btnDownloadText
             // 
             btnDownloadText.Enabled = false;
-            btnDownloadText.Location = new Point(609, 599);
+            btnDownloadText.Location = new Point(542, 32);
             btnDownloadText.Name = "btnDownloadText";
             btnDownloadText.Size = new Size(170, 23);
             btnDownloadText.TabIndex = 10;
@@ -158,7 +164,7 @@
             // btnDownloadZip
             // 
             btnDownloadZip.Enabled = false;
-            btnDownloadZip.Location = new Point(609, 570);
+            btnDownloadZip.Location = new Point(542, 3);
             btnDownloadZip.Name = "btnDownloadZip";
             btnDownloadZip.Size = new Size(170, 23);
             btnDownloadZip.TabIndex = 11;
@@ -167,28 +173,30 @@
             // 
             // txtOutput
             // 
+            txtOutput.Dock = DockStyle.Fill;
             txtOutput.Font = new Font("Fira Code", 11.9999981F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            txtOutput.Location = new Point(3, 42);
+            txtOutput.Location = new Point(0, 0);
             txtOutput.Multiline = true;
             txtOutput.Name = "txtOutput";
             txtOutput.ReadOnly = true;
             txtOutput.ScrollBars = ScrollBars.Both;
-            txtOutput.Size = new Size(776, 522);
+            txtOutput.Size = new Size(791, 506);
             txtOutput.TabIndex = 12;
             txtOutput.WordWrap = false;
             // 
             // lblStatus
             // 
             lblStatus.AutoSize = true;
-            lblStatus.Location = new Point(772, 571);
+            lblStatus.Location = new Point(3, 7);
             lblStatus.Name = "lblStatus";
-            lblStatus.Size = new Size(0, 15);
+            lblStatus.Size = new Size(65, 15);
             lblStatus.TabIndex = 13;
+            lblStatus.Text = "Status here";
             // 
             // lblTokenCount
             // 
             lblTokenCount.AutoSize = true;
-            lblTokenCount.Location = new Point(3, 603);
+            lblTokenCount.Location = new Point(3, 36);
             lblTokenCount.Name = "lblTokenCount";
             lblTokenCount.Size = new Size(86, 15);
             lblTokenCount.TabIndex = 14;
@@ -220,18 +228,15 @@
             // 
             // splitContainer1.Panel2
             // 
+            splitContainer1.Panel2.Controls.Add(splitContainer3);
             splitContainer1.Panel2.Controls.Add(btnGenerateText);
-            splitContainer1.Panel2.Controls.Add(lblTokenCount);
-            splitContainer1.Panel2.Controls.Add(btnCopy);
-            splitContainer1.Panel2.Controls.Add(btnDownloadText);
-            splitContainer1.Panel2.Controls.Add(btnDownloadZip);
-            splitContainer1.Panel2.Controls.Add(txtOutput);
             splitContainer1.Size = new Size(1568, 627);
             splitContainer1.SplitterDistance = 773;
             splitContainer1.TabIndex = 16;
             // 
             // splitContainer2
             // 
+            splitContainer2.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             splitContainer2.Location = new Point(12, 156);
             splitContainer2.Name = "splitContainer2";
             splitContainer2.Orientation = Orientation.Horizontal;
@@ -248,12 +253,33 @@
             splitContainer2.SplitterDistance = 30;
             splitContainer2.TabIndex = 8;
             // 
+            // splitContainer3
+            // 
+            splitContainer3.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            splitContainer3.Location = new Point(0, 42);
+            splitContainer3.Name = "splitContainer3";
+            splitContainer3.Orientation = Orientation.Horizontal;
+            // 
+            // splitContainer3.Panel1
+            // 
+            splitContainer3.Panel1.Controls.Add(txtOutput);
+            // 
+            // splitContainer3.Panel2
+            // 
+            splitContainer3.Panel2.Controls.Add(btnDownloadText);
+            splitContainer3.Panel2.Controls.Add(lblStatus);
+            splitContainer3.Panel2.Controls.Add(lblTokenCount);
+            splitContainer3.Panel2.Controls.Add(btnDownloadZip);
+            splitContainer3.Panel2.Controls.Add(btnCopy);
+            splitContainer3.Size = new Size(791, 585);
+            splitContainer3.SplitterDistance = 506;
+            splitContainer3.TabIndex = 15;
+            // 
             // MainForm
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1568, 627);
-            Controls.Add(lblStatus);
             Controls.Add(btnSelectZip);
             Controls.Add(btnSelectDirectory);
             Controls.Add(btnFetchGitHub);
@@ -266,7 +292,6 @@
             Text = "Form1";
             splitContainer1.Panel1.ResumeLayout(false);
             splitContainer1.Panel2.ResumeLayout(false);
-            splitContainer1.Panel2.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
             splitContainer2.Panel1.ResumeLayout(false);
@@ -274,6 +299,12 @@
             splitContainer2.Panel2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)splitContainer2).EndInit();
             splitContainer2.ResumeLayout(false);
+            splitContainer3.Panel1.ResumeLayout(false);
+            splitContainer3.Panel1.PerformLayout();
+            splitContainer3.Panel2.ResumeLayout(false);
+            splitContainer3.Panel2.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)splitContainer3).EndInit();
+            splitContainer3.ResumeLayout(false);
             ResumeLayout(false);
             PerformLayout();
         }
@@ -298,5 +329,6 @@
         private FlowLayoutPanel flowLayoutPanelExtensions;
         private SplitContainer splitContainer1;
         private SplitContainer splitContainer2;
+        private SplitContainer splitContainer3;
     }
 }
