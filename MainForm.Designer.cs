@@ -28,6 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
+            components = new System.ComponentModel.Container();
             lblRepoUrl = new Label();
             txtRepoUrl = new TextBox();
             lblAccessToken = new Label();
@@ -36,6 +37,8 @@
             btnSelectDirectory = new Button();
             btnSelectZip = new Button();
             treeViewFiles = new TreeView();
+            contextMenuTreeView = new ContextMenuStrip(components);
+            selectWithDepsToolStripMenuItem = new ToolStripMenuItem();
             btnGenerateText = new Button();
             btnCopy = new Button();
             btnDownloadText = new Button();
@@ -47,6 +50,7 @@
             splitContainer1 = new SplitContainer();
             splitContainer2 = new SplitContainer();
             splitContainer3 = new SplitContainer();
+            contextMenuTreeView.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
@@ -124,12 +128,27 @@
             // treeViewFiles
             // 
             treeViewFiles.CheckBoxes = true;
+            treeViewFiles.ContextMenuStrip = contextMenuTreeView;
             treeViewFiles.Dock = DockStyle.Fill;
             treeViewFiles.FullRowSelect = true;
             treeViewFiles.Location = new Point(0, 0);
             treeViewFiles.Name = "treeViewFiles";
             treeViewFiles.Size = new Size(754, 425);
             treeViewFiles.TabIndex = 7;
+            // 
+            // contextMenuTreeView
+            // 
+            contextMenuTreeView.Items.AddRange(new ToolStripItem[] { selectWithDepsToolStripMenuItem });
+            contextMenuTreeView.Name = "contextMenuTreeView";
+            contextMenuTreeView.Size = new Size(224, 26);
+            contextMenuTreeView.Opening += contextMenuTreeView_Opening;
+            // 
+            // selectWithDepsToolStripMenuItem
+            // 
+            selectWithDepsToolStripMenuItem.Name = "selectWithDepsToolStripMenuItem";
+            selectWithDepsToolStripMenuItem.Size = new Size(223, 22);
+            selectWithDepsToolStripMenuItem.Text = "Select with C# Dependencies";
+            selectWithDepsToolStripMenuItem.Click += selectWithDepsToolStripMenuItem_Click;
             // 
             // btnGenerateText
             // 
@@ -289,7 +308,8 @@
             Controls.Add(lblRepoUrl);
             Controls.Add(splitContainer1);
             Name = "MainForm";
-            Text = "Form1";
+            Text = "Repo2Text";
+            contextMenuTreeView.ResumeLayout(false);
             splitContainer1.Panel1.ResumeLayout(false);
             splitContainer1.Panel2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
@@ -330,5 +350,7 @@
         private SplitContainer splitContainer1;
         private SplitContainer splitContainer2;
         private SplitContainer splitContainer3;
+        private ContextMenuStrip contextMenuTreeView;
+        private ToolStripMenuItem selectWithDepsToolStripMenuItem;
     }
 }
