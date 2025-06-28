@@ -40,7 +40,6 @@ namespace Repo2Text
             this.splitContainer3.IsSplitterFixed = true;
             this.splitContainer3.Panel2MinSize = 75;
 
-            // Set form title
             this.Text = "Repo2Text";
         }
 
@@ -819,7 +818,7 @@ namespace Repo2Text
 
             CreateExtensionFiltersUI();
 
-            foreach (TreeNode node in treeViewFiles.Nodes) node.Expand();
+            // The line that expanded all nodes has been removed.
 
             treeViewFiles.EndUpdate();
             _isUpdatingTreeViewProgrammatically = false;
@@ -845,23 +844,6 @@ namespace Repo2Text
                     if (!_extensionTreeNodes[extension].Contains(fileNode)) _extensionTreeNodes[extension].Add(fileNode);
                 }
             }
-        }
-
-        private List<FileItem> GetAllFilesFromTree(TreeNodeCollection nodes)
-        {
-            var allFiles = new List<FileItem>();
-            foreach (TreeNode node in nodes)
-            {
-                if (node.Tag is FileItem item)
-                {
-                    allFiles.Add(item);
-                }
-                if (node.Nodes.Count > 0)
-                {
-                    allFiles.AddRange(GetAllFilesFromTree(node.Nodes));
-                }
-            }
-            return allFiles;
         }
 
         private List<FileItem> GetSelectedFiles(TreeNodeCollection nodes)
@@ -902,58 +884,52 @@ namespace Repo2Text
             sb.Append(indexSb.ToString());
             sb.AppendLine();
 
+            string token = txtAccessToken.Text.Trim();
             foreach (var file in selectedFiles.OrderBy(f => f.Path))
             {
-                string content = await GetFileContentAsync(file);
+                string content = $"Error: Could not retrieve content for {file.DisplayPath}";
+                try
+                {
+                    switch (file.SourceType)
+                    {
+                        case DataSourceType.GitHub:
+                            if (_currentRepoInfo == null || !_currentRepoInfo.IsValid || string.IsNullOrEmpty(_currentRepoInfo.ResolvedRef))
+                            {
+                                content = $"Error: GitHub repo info missing/invalid for {file.Path}."; break;
+                            }
+                            content = await GitHubService.GetFileContentAsync(
+                                _currentRepoInfo.Owner, _currentRepoInfo.RepoName,
+                                file.Path, _currentRepoInfo.ResolvedRef, token);
+                            break;
+                        case DataSourceType.LocalDirectory:
+                            content = await LocalFileService.ReadLocalFileContentAsync(file.SourceUrl);
+                            break;
+                        case DataSourceType.LocalZip:
+                            if (string.IsNullOrEmpty(_currentZipPath))
+                            {
+                                content = $"Error: ZIP path missing for {file.Path}."; break;
+                            }
+                            try
+                            {
+                                using (var archive = ZipFile.OpenRead(_currentZipPath))
+                                {
+                                    var entry = archive.GetEntry(file.SourceUrl);
+                                    if (entry != null) content = await LocalFileService.ReadZipEntryContentAsync(entry);
+                                    else content = $"Error: ZIP entry not found ({file.Path}).";
+                                }
+                            }
+                            catch (Exception zipEx) { content = $"Error reading ZIP entry for {file.Path}: {zipEx.Message}"; }
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    content = $"Error processing {file.DisplayPath}: {ex.Message}";
+                    Console.WriteLine(content);
+                }
                 sb.AppendLine().AppendLine("---").AppendLine($"File: /{file.DisplayPath.TrimStart('/')}").AppendLine("---").AppendLine().AppendLine(content ?? $"Error: Content for {file.DisplayPath} was null.");
             }
             return sb.ToString();
-        }
-
-        private async Task<string> GetFileContentAsync(FileItem file)
-        {
-            string content = $"Error: Could not retrieve content for {file.DisplayPath}";
-            string token = txtAccessToken.Text.Trim();
-            try
-            {
-                switch (file.SourceType)
-                {
-                    case DataSourceType.GitHub:
-                        if (_currentRepoInfo == null || !_currentRepoInfo.IsValid || string.IsNullOrEmpty(_currentRepoInfo.ResolvedRef))
-                        {
-                            return $"Error: GitHub repo info missing/invalid for {file.Path}.";
-                        }
-                        content = await GitHubService.GetFileContentAsync(
-                            _currentRepoInfo.Owner, _currentRepoInfo.RepoName,
-                            file.Path, _currentRepoInfo.ResolvedRef, token);
-                        break;
-                    case DataSourceType.LocalDirectory:
-                        content = await LocalFileService.ReadLocalFileContentAsync(file.SourceUrl);
-                        break;
-                    case DataSourceType.LocalZip:
-                        if (string.IsNullOrEmpty(_currentZipPath))
-                        {
-                            return $"Error: ZIP path missing for {file.Path}.";
-                        }
-                        try
-                        {
-                            using (var archive = ZipFile.OpenRead(_currentZipPath))
-                            {
-                                var entry = archive.GetEntry(file.SourceUrl);
-                                if (entry != null) content = await LocalFileService.ReadZipEntryContentAsync(entry);
-                                else content = $"Error: ZIP entry not found ({file.Path}).";
-                            }
-                        }
-                        catch (Exception zipEx) { content = $"Error reading ZIP entry for {file.Path}: {zipEx.Message}"; }
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                content = $"Error processing {file.DisplayPath}: {ex.Message}";
-                Console.WriteLine(content);
-            }
-            return content;
         }
 
         private void BuildIndexStringRecursive(Dictionary<string, object> directory, StringBuilder output, string prefix, bool isRoot = false)
@@ -1030,108 +1006,6 @@ namespace Repo2Text
                 finally
                 {
                     _isProgrammaticallyAdjustingSplitter = false;
-                }
-            }
-        }
-
-        // --- Dependency Analysis UI ---
-
-        private void contextMenuTreeView_Opening(object sender, System.ComponentModel.CancelEventArgs e)
-        {
-            var node = treeViewFiles.GetNodeAt(treeViewFiles.PointToClient(Cursor.Position));
-            if (node?.Tag is FileItem item && !item.IsDirectory)
-            {
-                // Only enable for .cs files
-                selectWithDepsToolStripMenuItem.Enabled = Path.GetExtension(item.Name).Equals(".cs", StringComparison.OrdinalIgnoreCase);
-            }
-            else
-            {
-                selectWithDepsToolStripMenuItem.Enabled = false;
-            }
-        }
-
-        private async void selectWithDepsToolStripMenuItem_Click(object sender, EventArgs e)
-        {
-            var node = treeViewFiles.GetNodeAt(treeViewFiles.PointToClient(Cursor.Position));
-            if (node?.Tag is not FileItem rootFile) return;
-
-            this.Cursor = Cursors.WaitCursor;
-            btnGenerateText.Enabled = false;
-
-            try
-            {
-                var allFiles = GetAllFilesFromTree(treeViewFiles.Nodes);
-                var dependentFiles = await DependencyResolver.FindDependenciesAsync(
-                    rootFile,
-                    allFiles,
-                    GetFileContentAsync,
-                    (statusMsg) => SetStatus(statusMsg, false)
-                    );
-
-                SelectFilesAndDependenciesInTree(dependentFiles);
-            }
-            catch (Exception ex)
-            {
-                SetStatus($"Dependency analysis failed: {ex.Message}", true);
-                MessageBox.Show($"An error occurred during dependency analysis:\n\n{ex.Message}", "Analysis Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                this.Cursor = Cursors.Default;
-                btnGenerateText.Enabled = true;
-            }
-        }
-
-        private void SelectFilesAndDependenciesInTree(HashSet<FileItem> filesToSelect)
-        {
-            _isUpdatingTreeViewProgrammatically = true;
-            treeViewFiles.BeginUpdate();
-
-            var filePathsToSelect = new HashSet<string>(filesToSelect.Select(f => f.Path));
-
-            // Uncheck all file nodes first
-            SetAllFileNodesCheckedState(treeViewFiles.Nodes, false);
-
-            // Check the nodes for the dependent files
-            CheckDependencyNodes(treeViewFiles.Nodes, filePathsToSelect);
-
-            // Update parent and extension states
-            foreach (TreeNode rootNode in treeViewFiles.Nodes)
-            {
-                UpdateAllParentStatesBottomUp(rootNode);
-            }
-            UpdateExtensionCheckStates();
-
-            treeViewFiles.EndUpdate();
-            _isUpdatingTreeViewProgrammatically = false;
-        }
-
-        private void SetAllFileNodesCheckedState(TreeNodeCollection nodes, bool isChecked)
-        {
-            foreach (TreeNode node in nodes)
-            {
-                if (node.Tag is FileItem item && !item.IsDirectory)
-                {
-                    node.Checked = isChecked;
-                }
-                if (node.Nodes.Count > 0)
-                {
-                    SetAllFileNodesCheckedState(node.Nodes, isChecked);
-                }
-            }
-        }
-
-        private void CheckDependencyNodes(TreeNodeCollection nodes, HashSet<string> pathsToSelect)
-        {
-            foreach (TreeNode node in nodes)
-            {
-                if (node.Tag is FileItem item && !item.IsDirectory && pathsToSelect.Contains(item.Path))
-                {
-                    node.Checked = true;
-                }
-                if (node.Nodes.Count > 0)
-                {
-                    CheckDependencyNodes(node.Nodes, pathsToSelect);
                 }
             }
         }
