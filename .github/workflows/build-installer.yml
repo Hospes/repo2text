@@ -2,9 +2,10 @@ name: Build Windows Installer and Attach to Release
 
 on:
   push:
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+    tags: 
+        - 'v?[0-9]+.[0-9]+.[0-9]+'
+    branches: 
+        - 'release/**'
   release:
     types: [published]
   workflow_dispatch:
@@ -13,12 +14,13 @@ jobs:
   build:
     name: Build and Package for Windows x64
     if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'release' && github.event.action == 'published' && github.event.release.tag_name != '')
-    runs-on: [self-hosted, windows, x64]
+      (github.event_name == 'release' && github.event.action == 'published')
+    runs-on: windows-latest
     outputs:
       installer_filename: ${{ steps.get_installer_path.outputs.name }}
+      clean_version: ${{ steps.version_info.outputs.clean_version }}
 
     steps:
     - name: Checkout repository
@@ -27,6 +29,22 @@ jobs:
         ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
         fetch-depth: 0 
 
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Install Inno Setup
+      shell: powershell
+      run: |
+        choco install innosetup --no-progress
+        if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+            Write-Host "Inno Setup installed successfully."
+        } else {
+            Write-Error "Inno Setup executable not found."
+            exit 1
+        }
+
     - name: Determine Version from Tag
       id: version_info
       shell: powershell
@@ -34,7 +52,7 @@ jobs:
         $versionString = ""
         if ("${{ github.event_name }}" -eq "release") {
           $versionString = "${{ github.event.release.tag_name }}"
-        } elseif ("${{ github.event_name }}" -eq "push" -and "${{ github.ref }}".StartsWith("refs/tags/")) {
+        } elseif ("${{ github.event_name }}" -eq "push") {
           $versionString = "${{ github.ref_name }}"
         } elseif ("${{ github.event_name }}" -eq "workflow_dispatch") {
           if ("${{ github.ref }}".StartsWith("refs/tags/")) {
@@ -46,11 +64,9 @@ jobs:
           $versionString = "0.0.0-unknown" 
         }
         $cleanVersion = $versionString -replace '^v', ''
-        if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
-            Write-Warning "Clean version was empty after processing '$versionString', defaulting to 0.0.0-fallback-version-step."
-            $cleanVersion = "0.0.0-fallback-version-step"
-        }
-        Write-Host "Determined clean version for Inno Setup: $cleanVersion"
+        # Sanitize for Inno Setup (replace slashes from branch names with dashes)
+        $cleanVersion = $cleanVersion -replace '[/\\:]', '-'
+        Write-Host "Determined clean version: $cleanVersion"
         echo "clean_version=$cleanVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
     - name: Restore dependencies
@@ -59,77 +75,37 @@ jobs:
     - name: Publish application
       run: dotnet publish Repo2Text.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishReadyToRun=true -o ./publish_output
 
-    # REMOVED: - name: Create version.is_inc file for Inno Setup
-
     - name: Compile Inno Setup script
       shell: powershell 
       env:
-        # Pass the clean version to this step's environment
         APP_VERSION_CLEAN: ${{ steps.version_info.outputs.clean_version }}
       run: |
         $effectiveVersion = $env:APP_VERSION_CLEAN
-        if ([string]::IsNullOrWhiteSpace($effectiveVersion)) {
-          $effectiveVersion = "0.0.0-ps-default" # Fallback if env var is empty
-          Write-Warning "APP_VERSION_CLEAN was empty or not set. Using default for ISCC: $effectiveVersion"
-        }
-        
-        Write-Host "Attempting to compile Inno Setup with version: $effectiveVersion"
-        
-        # Construct the arguments for ISCC.exe
-        # The /D switch value should be quoted if it might contain spaces.
-        # Since our versions (e.g., 0.0.3) don't, quotes are technically optional for the value part,
-        # but it's safer to include them for the Name=Value pair.
-        $isccArguments = "/DMyAppVersionFromWorkflow=`"$effectiveVersion`"" # Note the escaped quotes for PowerShell string
-        # Alternative for clarity if $effectiveVersion could have quotes itself (not our case):
-        # $isccArguments = "/DMyAppVersionFromWorkflow={0}" -f """$effectiveVersion"""
-        
-        Write-Host "ISCC Arguments: $isccArguments Repo2Text.iss"
-        
-        # Execute ISCC.exe. Ensure it's in PATH or provide full path.
-        # Example if not in PATH: & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $isccArguments Repo2Text.iss
-        & ISCC.exe $isccArguments Repo2Text.iss
-        
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Inno Setup compilation failed with exit code $LASTEXITCODE"
-            exit $LASTEXITCODE # Fails the step
-        }
-        Write-Host "Inno Setup compilation completed."
+        $isccArguments = "/DMyAppVersionFromWorkflow=`"$effectiveVersion`""
+        $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        & $isccPath $isccArguments Repo2Text.iss
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    - name: Prepare Installer Info (Find the exact generated installer)
+    - name: Prepare Installer Info
       id: get_installer_path
       shell: powershell
       env:
-        # Use the same clean_version that was intended for ISCC
         EXPECTED_VERSION_FROM_BUILD: ${{ steps.version_info.outputs.clean_version }} 
       run: |
         $installerDir = ".\installer_output\"
         $isccVersion = $env:EXPECTED_VERSION_FROM_BUILD
-        if ([string]::IsNullOrWhiteSpace($isccVersion)) {
-            # This logic should align with the default set in Compile Inno Setup step if APP_VERSION_CLEAN was empty
-             $isccVersion = "0.0.0-ps-default" 
-            Write-Warning "EXPECTED_VERSION_FROM_BUILD was empty, assuming ISCC used '$isccVersion' from PowerShell script fallback"
-        }
-
         $expectedFileName = "Repo2Text_Setup_v${isccVersion}.exe"
         $fullPathToExpectedFile = Join-Path -Path $installerDir -ChildPath $expectedFileName
         
-        Write-Host "Looking for installer file: $expectedFileName in directory: $installerDir"
-
         if (-not (Test-Path $fullPathToExpectedFile)) {
-          Write-Error "Expected installer file '$expectedFileName' not found in $installerDir. Check Inno Setup output and versioning logic."
-          Write-Host "Files in $($installerDir):"
-          Get-ChildItem -Path $installerDir | ForEach-Object { Write-Host $_.Name }
+          Write-Error "Expected installer file '$expectedFileName' not found."
           exit 1
         }
         
-        $fileName = $expectedFileName
-        $fullPath = $fullPathToExpectedFile
+        echo "path=$fullPathToExpectedFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        echo "name=$expectedFileName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         
-        Write-Host "Found installer: $fileName at $fullPath"
-        echo "path=$fullPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-        echo "name=$fileName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-        
-    - name: Upload Installer Artifact (for workflow runs)
+    - name: Upload Installer Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Repo2Text-Installer-Windows-x64
@@ -138,28 +114,28 @@ jobs:
   upload_to_release:
     name: Upload Installer to GitHub Release
     if: |
-      github.event_name == 'release' &&
-      github.event.action == 'published' &&
-      github.event.release.tag_name != '' 
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && github.event.action == 'published')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-    - name: Download installer artifact from build job
+    - name: Download installer artifact
       uses: actions/download-artifact@v4
       with:
         name: Repo2Text-Installer-Windows-x64
         path: ./installer_download
 
-    - name: Display structure of downloaded files
-      run: ls -R ./installer_download
-
     - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./installer_download/${{ needs.build.outputs.installer_filename }}
+        tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || (startsWith(github.ref, 'refs/tags/') && github.ref_name || format('manual-{0}', needs.build.outputs.clean_version)) }}
+        name: ${{ github.event_name == 'release' && github.event.release.name || (startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Manual Release {0}', needs.build.outputs.clean_version)) }}
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./installer_download/${{ needs.build.outputs.installer_filename }}
-        asset_name: ${{ needs.build.outputs.installer_filename }}
-        asset_content_type: application/vnd.microsoft.portable-executable
